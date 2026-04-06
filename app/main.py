@@ -1,4 +1,5 @@
 import os
+from sqlalchemy import text
 import cloudinary
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +22,27 @@ cloudinary.config(
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
 
+# Initialize database tables
 Base.metadata.create_all(bind=engine)
+
+# --- QUICK SQLITE DATABASE PATCH ---
+# This forces SQLite to add our new columns to the existing orders table
+def upgrade_db():
+    with engine.begin() as conn:
+        columns_to_add = [
+            "ALTER TABLE orders ADD COLUMN promo_code VARCHAR",
+            "ALTER TABLE orders ADD COLUMN discount_amount FLOAT DEFAULT 0.0",
+            "ALTER TABLE orders ADD COLUMN final_paid_amount FLOAT",
+            "ALTER TABLE orders ADD COLUMN delivery_location VARCHAR"
+        ]
+        for query in columns_to_add:
+            try:
+                conn.execute(text(query))
+            except Exception:
+                pass # If the column already exists, just ignore the error and move on!
+
+upgrade_db()
+# -----------------------------------
 
 os.makedirs("uploads", exist_ok=True)
 
