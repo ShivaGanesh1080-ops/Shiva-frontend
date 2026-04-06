@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.database import get_db
-from app.models.order import Order
+from app.models.order import Order, Promotion
 from app.models.menu_item import MenuItem
 from app.models.shop import Shop
 from app.models.worker import Worker
@@ -22,6 +22,41 @@ def get_shop_config(shop):
         except:
             config = {}
     return config
+
+
+@router.post("/validate-promo")
+async def validate_promo(payload: dict, db: Session = Depends(get_db)):
+    shop_slug = payload.get("shop_slug")
+    code = payload.get("code")
+    cart_total = payload.get("cart_total", 0.0)
+    
+    promo = db.query(Promotion).filter(
+        func.upper(Promotion.code) == code.upper(), 
+        Promotion.shop_slug == shop_slug,
+        Promotion.is_active == True
+    ).first()
+    
+    if not promo:
+        raise HTTPException(status_code=400, detail="Invalid or expired promo code.")
+        
+    discount = 0.0
+    if promo.discount_type == "percentage":
+        discount = cart_total * (promo.value / 100)
+        if promo.max_discount and discount > promo.max_discount:
+            discount = promo.max_discount
+    elif promo.discount_type == "flat":
+        discount = promo.value
+        
+    discount = min(discount, cart_total)
+    final_total = cart_total - discount
+    
+    return {
+        "code": promo.code,
+        "discount_amount": discount,
+        "final_total": final_total,
+        "message": f"Promo applied! You saved ₹{discount:.2f}"
+    }
+
 
 @router.post("/place")
 async def place_order(payload: dict, db: Session = Depends(get_db)):
@@ -44,6 +79,30 @@ async def place_order(payload: dict, db: Session = Depends(get_db)):
                 max_prep_time = item_prep
             total_amount += (item.price * qty)
 
+    # Backend Discount Calculation
+    promo_code = payload.get("promo_code")
+    discount_amount = 0.0
+    
+    if promo_code:
+        promo = db.query(Promotion).filter(
+            func.upper(Promotion.code) == promo_code.upper(), 
+            Promotion.shop_slug == shop.slug,
+            Promotion.is_active == True
+        ).first()
+        
+        if promo:
+            if promo.discount_type == "percentage":
+                discount_amount = total_amount * (promo.value / 100)
+                if promo.max_discount and discount_amount > promo.max_discount:
+                    discount_amount = promo.max_discount
+            elif promo.discount_type == "flat":
+                discount_amount = promo.value
+            
+            discount_amount = min(discount_amount, total_amount)
+
+    final_paid_amount = total_amount - discount_amount
+
+    # AI Order Timing & Assignment
     base_order_time = max_prep_time + (total_items * 1.5)
     workers = db.query(Worker).filter(Worker.shop_id == shop.id).all()
     assigned_worker_name = None
@@ -74,7 +133,6 @@ async def place_order(payload: dict, db: Session = Depends(get_db)):
     token = secrets.token_hex(3).upper()
     payment_method = payload.get("payment_method", "online")
     
-    # 1. Dynamic Razorpay Integration (Bring Your Own Keys)
     rzp_order_id = f"order_{token}"
     key_id = "dummy_key"
 
@@ -88,7 +146,7 @@ async def place_order(payload: dict, db: Session = Depends(get_db)):
         try:
             client = razorpay.Client(auth=(rzp_key, rzp_secret))
             payment = client.order.create({
-                "amount": int(total_amount * 100), # Amount in paise
+                "amount": int(final_paid_amount * 100), 
                 "currency": "INR",
                 "payment_capture": 1
             })
@@ -98,12 +156,21 @@ async def place_order(payload: dict, db: Session = Depends(get_db)):
             print(f"❌ RAZORPAY CREATE ERROR: {str(e)}")
             raise HTTPException(500, "Payment Gateway Error. Shop owner keys may be invalid.")
 
+    # --- INJECT DELIVERY LOCATION ---
+    delivery_location = payload.get("delivery_location")
+
     new_order = Order(
         shop_id=shop.id, token=token, customer_name=payload.get("customer_name", "Guest"),
         customer_phone=payload.get("customer_phone", ""), hall_ticket=payload.get("hall_ticket", ""),
         order_type=payload.get("order_type", "dine_in"), payment_method=payment_method,
         payment_status="paid" if payment_method == "cod" else "pending",
-        status="pending", total_amount=total_amount, items=payload.get("items", []),
+        status="pending", 
+        total_amount=total_amount, 
+        promo_code=promo_code if discount_amount > 0 else None,
+        discount_amount=discount_amount,
+        final_paid_amount=final_paid_amount,
+        delivery_location=delivery_location, # <-- SAVED HERE
+        items=payload.get("items", []),
         assigned_worker=assigned_worker_name, estimated_time=final_eta
     )
 
@@ -112,10 +179,10 @@ async def place_order(payload: dict, db: Session = Depends(get_db)):
     db.refresh(new_order)
 
     if payment_method == "cod":
-        await manager.broadcast(shop.slug, {"type": "new_order", "order": {"token": new_order.token, "status": new_order.status, "customer_name": new_order.customer_name, "items": new_order.items, "order_type": new_order.order_type, "total_amount": new_order.total_amount, "assigned_worker": assigned_worker_name, "estimated_time": final_eta}})
+        await manager.broadcast(shop.slug, {"type": "new_order", "order": {"token": new_order.token, "status": new_order.status, "customer_name": new_order.customer_name, "items": new_order.items, "order_type": new_order.order_type, "total_amount": new_order.final_paid_amount, "delivery_location": new_order.delivery_location, "assigned_worker": assigned_worker_name, "estimated_time": final_eta}})
 
     return {
-        "token": new_order.token, "amount": float(new_order.total_amount) * 100, 
+        "token": new_order.token, "amount": float(new_order.final_paid_amount) * 100, 
         "key_id": key_id, "razorpay_order_id": rzp_order_id,
         "assigned_worker": assigned_worker_name, "estimated_time": final_eta
     }
@@ -137,19 +204,16 @@ async def verify_payment(payload: dict, db: Session = Depends(get_db)):
     client = razorpay.Client(auth=(rzp_key, rzp_secret))
     
     try:
-        # Razorpay magically checks the signature here using math!
         client.utility.verify_payment_signature({
             'razorpay_order_id': payload.get("razorpay_order_id"),
             'razorpay_payment_id': payload.get("razorpay_payment_id"),
             'razorpay_signature': payload.get("razorpay_signature")
         })
         
-        # If the code reaches here, the payment is 100% legit and secure
         order.payment_status = "paid"
         db.commit()
         
-        # Tell the kitchen a new order is paid and ready to cook!
-        await manager.broadcast(shop.slug, {"type": "new_order", "order": {"token": order.token, "status": order.status, "customer_name": order.customer_name, "items": order.items, "order_type": order.order_type, "total_amount": order.total_amount, "assigned_worker": order.assigned_worker, "estimated_time": order.estimated_time}})
+        await manager.broadcast(shop.slug, {"type": "new_order", "order": {"token": order.token, "status": order.status, "customer_name": order.customer_name, "items": order.items, "order_type": order.order_type, "total_amount": order.final_paid_amount, "delivery_location": order.delivery_location, "assigned_worker": order.assigned_worker, "estimated_time": order.estimated_time}})
         
         return {"status": "success"}
     except Exception as e:
@@ -162,7 +226,11 @@ def track_order(token: str, db: Session = Depends(get_db)):
     if not order: raise HTTPException(status_code=404, detail="Order not found")
     return {
         "token": order.token, "status": order.status, "payment_status": order.payment_status,
-        "total_amount": order.total_amount, "items": order.items, "customer_name": order.customer_name,
+        "total_amount": order.total_amount, 
+        "discount_amount": order.discount_amount,
+        "final_paid_amount": order.final_paid_amount,
+        "delivery_location": order.delivery_location,
+        "items": order.items, "customer_name": order.customer_name,
         "customer_phone": order.customer_phone, "hall_ticket": order.hall_ticket, "order_type": order.order_type,
         "created_at": order.created_at.isoformat(), "estimated_time": order.estimated_time, "assigned_worker": order.assigned_worker,
         "shop_name": order.shop.name if order.shop else "Shop"
@@ -173,7 +241,7 @@ def get_worker_orders(slug: str, db: Session = Depends(get_db)):
     shop = db.query(Shop).filter(Shop.slug == slug).first()
     if not shop: raise HTTPException(status_code=404, detail="Shop not found")
     orders = db.query(Order).filter(Order.shop_id == shop.id, Order.status.in_(["pending", "preparing", "confirmed"])).order_by(Order.id.desc()).all()
-    return [{"token": o.token, "status": o.status, "customer_name": o.customer_name, "customer_phone": o.customer_phone, "hall_ticket": o.hall_ticket, "items": o.items, "order_type": o.order_type, "total_amount": o.total_amount, "payment_status": o.payment_status, "created_at": o.created_at.isoformat(), "assigned_worker": o.assigned_worker, "estimated_time": o.estimated_time} for o in orders]
+    return [{"token": o.token, "status": o.status, "customer_name": o.customer_name, "customer_phone": o.customer_phone, "hall_ticket": o.hall_ticket, "items": o.items, "order_type": o.order_type, "total_amount": o.final_paid_amount, "delivery_location": o.delivery_location, "payment_status": o.payment_status, "created_at": o.created_at.isoformat(), "assigned_worker": o.assigned_worker, "estimated_time": o.estimated_time} for o in orders]
 
 @router.post("/worker/complete/{token}")
 async def complete_order(token: str, db: Session = Depends(get_db)):
@@ -183,13 +251,11 @@ async def complete_order(token: str, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success", "token": order.token}
 
-# --- WEBSOCKET ROUTE FOR KITCHEN DISPLAY ---
 @router.websocket("/ws/{slug}")
 async def websocket_endpoint(websocket: WebSocket, slug: str):
     await manager.connect(websocket, slug)
     try:
         while True:
-            # Keep the connection open and listening
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, slug)
