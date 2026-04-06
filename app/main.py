@@ -30,6 +30,8 @@ app = FastAPI(
     version="3.0.0",
 )
 
+# ✅ CORS Middleware is perfectly placed! 
+# This tells the cloud server to accept requests from your frontend.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
