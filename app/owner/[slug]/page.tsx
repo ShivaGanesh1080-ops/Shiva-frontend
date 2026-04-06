@@ -80,7 +80,8 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
   useEffect(() => { 
     if (loggedIn && token) { 
         loadData(); 
-        const interval = setInterval(loadData, 10000); // Increased to 10s to avoid UI flickering
+        // 🔥 SENIOR DEV FIX: Slowed down to 60 seconds (60000ms) to stop API rate limit spam!
+        const interval = setInterval(loadData, 60000); 
         return () => clearInterval(interval); 
     } 
   }, [loggedIn, token, slug]);
