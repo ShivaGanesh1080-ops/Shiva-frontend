@@ -11,8 +11,6 @@ type QRData = { customer_qr: string; owner_qr: string; worker_qr: string; custom
 const FORM_FIELDS = [
   { label: "Shop Name *", key: "name", placeholder: "e.g. Shiva Canteen", full: true },
   { label: "URL Slug *", key: "slug", placeholder: "e.g. shiva-canteen (no spaces)" },
-  { label: "UPI ID", key: "upi_id", placeholder: "e.g. shiva@upi" },
-  { label: "Institution Name", key: "institution_name", placeholder: "e.g. ABC College" },
   { label: "Owner Username *", key: "owner_username", placeholder: "Login username" },
   { label: "Owner Password *", key: "owner_password", placeholder: "Login password" },
 ];
@@ -29,6 +27,11 @@ export default function AdminPage() {
   const [creating, setCreating] = useState(false);
   const [qrData, setQrData] = useState<QRData | null>(null);
   const [qrShop, setQrShop] = useState<Shop | null>(null);
+  
+  // 🔥 NEW: Master Admin Edit Shop feature
+  const [editingShop, setEditingShop] = useState<Shop | null>(null);
+  const [editForm, setEditForm] = useState({ upi_id: "", rzp_key_id: "", rzp_key_secret: "" });
+
   const [newAdminUser, setNewAdminUser] = useState("");
   const [newAdminPass, setNewAdminPass] = useState("");
   const [updatingCreds, setUpdatingCreds] = useState(false);
@@ -43,8 +46,12 @@ export default function AdminPage() {
 
   useEffect(() => {
     setMounted(true);
+    // 💾 CHECK STORAGE ON LOAD
     const token = localStorage.getItem("master_admin_token");
-    if (token) { setLoggedIn(true); loadShops(); }
+    if (token) { 
+      setLoggedIn(true); 
+      loadShops(); 
+    }
   }, []);
 
   async function handleLogin() {
@@ -56,7 +63,10 @@ export default function AdminPage() {
       });
       if (!res.ok) { setLoginError("Invalid master admin credentials"); return; }
       const data = await res.json();
+      
+      // 💾 SAVE TO STORAGE PERMANENTLY
       localStorage.setItem("master_admin_token", data.token);
+      
       setLoggedIn(true);
       loadShops();
     } catch (e: any) { setLoginError("Cannot connect to server."); }
@@ -92,6 +102,30 @@ export default function AdminPage() {
     }
   }
 
+  // 🔥 NEW: Save changes from Master Admin
+  async function handleSaveEdit() {
+      if (!editingShop) return;
+      try {
+          const payload = { settings: { rzp_key_id: editForm.rzp_key_id, rzp_key_secret: editForm.rzp_key_secret, upi_id: editForm.upi_id } };
+          const res = await fetch(`${BASE_API}/api/admin/shops/${editingShop.id}/force-config`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json", "x-admin-token": localStorage.getItem("master_admin_token") || "" },
+              body: JSON.stringify(payload)
+          });
+          
+          if (!res.ok) {
+              alert("Backend endpoint for Master Edit not found. Please use the Owner Dashboard to save Razorpay keys.");
+              return;
+          }
+          
+          alert("Shop keys updated successfully from Admin level!");
+          setEditingShop(null);
+          await loadShops();
+      } catch (e) {
+          alert("Failed to force update shop. Use Owner Dashboard.");
+      }
+  }
+
   async function handleUpdateCredentials() {
     if (!newAdminUser && !newAdminPass) return alert("Enter a new username or password.");
     setUpdatingCreds(true);
@@ -114,7 +148,6 @@ export default function AdminPage() {
   async function loadQR(shop: Shop) {
     try {
       const data = await API.adminGetQRCodes(shop.id);
-      // We add 'as any' here to satisfy the TypeScript compiler for the build
       setQrData(data as any); 
       setQrShop(shop);
     } catch (e) {
@@ -123,6 +156,7 @@ export default function AdminPage() {
   }
 
   function handleLogout() {
+    // 🧹 CLEAR STORAGE ON LOGOUT
     localStorage.removeItem("master_admin_token");
     setLoggedIn(false); setShops([]); setUsername(""); setPassword("");
   }
@@ -148,6 +182,25 @@ export default function AdminPage() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#f3f4f6", color: "#111827", fontFamily: "'DM Sans',sans-serif" }}>
+      
+      {/* 🔥 MASTER ADMIN EDIT MODAL */}
+      {editingShop && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 24 }}>
+          <div style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 24, padding: 32, width: "100%", maxWidth: 500, boxShadow: "0 20px 40px rgba(0,0,0,0.1)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+              <div style={{ fontSize: 20, fontWeight: 800 }}>Master Edit: {editingShop.name}</div>
+              <button onClick={() => setEditingShop(null)} style={{ background: "transparent", border: "none", fontSize: 24, cursor: "pointer" }}>×</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div><div style={{ fontSize: 12, fontWeight: 700, color: "#6b7280", marginBottom: 6 }}>Razorpay Key ID</div><input value={editForm.rzp_key_id} onChange={e => setEditForm({...editForm, rzp_key_id: e.target.value})} placeholder="rzp_live_..." style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", outline: "none" }} /></div>
+              <div><div style={{ fontSize: 12, fontWeight: 700, color: "#6b7280", marginBottom: 6 }}>Razorpay Secret</div><input type="password" value={editForm.rzp_key_secret} onChange={e => setEditForm({...editForm, rzp_key_secret: e.target.value})} placeholder="Secret Key" style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", outline: "none" }} /></div>
+              <div><div style={{ fontSize: 12, fontWeight: 700, color: "#6b7280", marginBottom: 6 }}>Backup UPI ID</div><input value={editForm.upi_id} onChange={e => setEditForm({...editForm, upi_id: e.target.value})} placeholder="e.g. shiva@upi" style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", outline: "none" }} /></div>
+            </div>
+            <button onClick={handleSaveEdit} style={{ width: "100%", background: "#7c3aed", color: "#fff", padding: 16, borderRadius: 12, fontWeight: 800, marginTop: 24, border: "none", cursor: "pointer" }}>Force Save Configuration</button>
+          </div>
+        </div>
+      )}
+
       {qrShop && qrData && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 24 }}>
           <div style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 24, padding: 32, width: "100%", maxWidth: 600, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 40px rgba(0,0,0,0.1)" }}>
@@ -194,7 +247,6 @@ export default function AdminPage() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-          {/* ✅ FIX IS HERE: Added the missing `: "none"` to the boxShadow condition */}
           <div style={{ background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 24, padding: "6px 16px", fontSize: 13, color: "#111827", fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: activeCount > 0 ? "#22c55e" : "#9ca3af", boxShadow: activeCount > 0 ? "0 0 8px rgba(34,197,94,0.5)" : "none", display: "inline-block" }} />
             {activeCount} Network Nodes Online
@@ -231,33 +283,45 @@ export default function AdminPage() {
               </div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(340px,1fr))", gap: 24 }}>
-                {shops.map((shop, i) => (
-                  <div key={shop.id} style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 20, padding: 24, display: "flex", flexDirection: "column", transition: "transform 0.2s, box-shadow 0.2s", boxShadow: "0 4px 6px rgba(0,0,0,0.02)" }} onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 10px 15px rgba(0,0,0,0.05)"; }} onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "0 4px 6px rgba(0,0,0,0.02)"; }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-                      <div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                          <div style={{ width: 12, height: 12, borderRadius: "50%", background: shop.is_active ? "#22c55e" : "#9ca3af", boxShadow: shop.is_active ? "0 0 8px rgba(34,197,94,0.4)" : "none" }} />
-                          <div style={{ fontWeight: 800, fontSize: 18, color: "#111827", fontFamily: "'Syne',sans-serif" }}>{shop.name}</div>
+                {shops.map((shop, i) => {
+                  let rzpId = "", rzpSec = "", upi = "";
+                  if (shop.config) {
+                    try {
+                        let parsed = typeof shop.config === "string" ? JSON.parse(shop.config.replace(/'/g, '"').replace(/True/g, 'true').replace(/False/g, 'false')) : shop.config;
+                        if (typeof parsed === "string") parsed = JSON.parse(parsed);
+                        rzpId = parsed.rzp_key_id || ""; rzpSec = parsed.rzp_key_secret || ""; upi = parsed.upi_id || "";
+                    } catch(e){}
+                  }
+
+                  return (
+                    <div key={shop.id} style={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 20, padding: 24, display: "flex", flexDirection: "column", transition: "transform 0.2s, box-shadow 0.2s", boxShadow: "0 4px 6px rgba(0,0,0,0.02)" }} onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 10px 15px rgba(0,0,0,0.05)"; }} onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "0 4px 6px rgba(0,0,0,0.02)"; }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                            <div style={{ width: 12, height: 12, borderRadius: "50%", background: shop.is_active ? "#22c55e" : "#9ca3af", boxShadow: shop.is_active ? "0 0 8px rgba(34,197,94,0.4)" : "none" }} />
+                            <div style={{ fontWeight: 800, fontSize: 18, color: "#111827", fontFamily: "'Syne',sans-serif" }}>{shop.name}</div>
+                          </div>
+                          <div style={{ color: "#7c3aed", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", background: "#f3e8ff", display: "inline-block", padding: "4px 10px", borderRadius: 8, fontWeight: 700 }}>Slug: /{shop.slug}</div>
                         </div>
-                        <div style={{ color: "#7c3aed", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", background: "#f3e8ff", display: "inline-block", padding: "4px 10px", borderRadius: 8, fontWeight: 700 }}>Slug: /{shop.slug}</div>
+                        {/* 🔥 EDIT BUTTON */}
+                        <button onClick={() => { setEditingShop(shop); setEditForm({rzp_key_id: rzpId, rzp_key_secret: rzpSec, upi_id: upi}); }} style={{ background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, color: "#374151" }}>✏️ Edit Keys</button>
                       </div>
-                      <div style={{ background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 10, padding: "4px 12px", fontSize: 11, color: "#4b5563", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1 }}>{shop.shop_type}</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, background: "#f9fafb", borderRadius: 14, padding: 16, marginBottom: 24, border: "1px solid #f3f4f6" }}>
+                        <div><div style={{ color: "#6b7280", fontSize: 11, fontWeight: 800, marginBottom: 4 }}>TOTAL</div><div style={{ color: "#111827", fontSize: 16, fontWeight: 800 }}>{shop.total_orders}</div></div>
+                        <div><div style={{ color: "#6b7280", fontSize: 11, fontWeight: 800, marginBottom: 4 }}>PAID</div><div style={{ color: "#111827", fontSize: 16, fontWeight: 800 }}>{shop.paid_orders}</div></div>
+                        <div><div style={{ color: "#6b7280", fontSize: 11, fontWeight: 800, marginBottom: 4 }}>REVENUE</div><div style={{ color: "#16a34a", fontSize: 16, fontWeight: 800 }}>₹{(shop.revenue || 0).toFixed(0)}</div></div>
+                      </div>
+                      <div style={{ display: "flex", gap: 10, marginTop: "auto" }}>
+                        <button onClick={() => loadQR(shop)} style={{ flex: 1, background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, color: "#111827", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>📱 Codes</button>
+                        <a href={`${BASE_FRONTEND}/menu/${shop.slug}`} target="_blank" style={{ flex: 1, background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, color: "#111827", fontSize: 13, fontWeight: 700, textDecoration: "none", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center" }}>Preview</a>
+                        <button onClick={() => handleToggle(shop.id)} style={{ flex: 1, background: shop.is_active ? "#f0fdf4" : "#f9fafb", border: `1px solid ${shop.is_active ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 10, padding: 10, color: shop.is_active ? "#16a34a" : "#6b7280", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
+                          {shop.is_active ? "Online" : "Offline"}
+                        </button>
+                        <button onClick={() => handleDelete(shop.id)} style={{ width: 44, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, color: "#ef4444", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>🗑️</button>
+                      </div>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, background: "#f9fafb", borderRadius: 14, padding: 16, marginBottom: 24, border: "1px solid #f3f4f6" }}>
-                      <div><div style={{ color: "#6b7280", fontSize: 11, fontWeight: 800, marginBottom: 4 }}>TOTAL</div><div style={{ color: "#111827", fontSize: 16, fontWeight: 800 }}>{shop.total_orders}</div></div>
-                      <div><div style={{ color: "#6b7280", fontSize: 11, fontWeight: 800, marginBottom: 4 }}>PAID</div><div style={{ color: "#111827", fontSize: 16, fontWeight: 800 }}>{shop.paid_orders}</div></div>
-                      <div><div style={{ color: "#6b7280", fontSize: 11, fontWeight: 800, marginBottom: 4 }}>REVENUE</div><div style={{ color: "#16a34a", fontSize: 16, fontWeight: 800 }}>₹{(shop.revenue || 0).toFixed(0)}</div></div>
-                    </div>
-                    <div style={{ display: "flex", gap: 10, marginTop: "auto" }}>
-                      <button onClick={() => loadQR(shop)} style={{ flex: 1, background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, color: "#111827", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>📱 Codes</button>
-                      <a href={`${BASE_FRONTEND}/menu/${shop.slug}`} target="_blank" style={{ flex: 1, background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, color: "#111827", fontSize: 13, fontWeight: 700, textDecoration: "none", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center" }}>Preview</a>
-                      <button onClick={() => handleToggle(shop.id)} style={{ flex: 1, background: shop.is_active ? "#f0fdf4" : "#f9fafb", border: `1px solid ${shop.is_active ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 10, padding: 10, color: shop.is_active ? "#16a34a" : "#6b7280", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
-                        {shop.is_active ? "Online" : "Offline"}
-                      </button>
-                      <button onClick={() => handleDelete(shop.id)} style={{ width: 44, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, color: "#ef4444", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>🗑️</button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

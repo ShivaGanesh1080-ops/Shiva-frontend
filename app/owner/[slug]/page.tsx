@@ -52,7 +52,10 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
   const [newItemImage, setNewItemImage] = useState<File | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedItems, setSelectedItems] = useState<number[]>([]);
+  
+  // 🔥 ALWAYS initialize with empty strings so React controls the inputs immediately
   const [settingsForm, setSettingsForm] = useState({ upi_id: "", cod_enabled: false, hall_ticket_enabled: false, theme: "dark", rzp_key_id: "", rzp_key_secret: "" });
+  
   const [verifyPassword, setVerifyPassword] = useState("");
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
@@ -73,6 +76,16 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
     setMounted(true); 
     const t = localStorage.getItem(`owner_token_${slug}`); 
     const savedTheme = localStorage.getItem(`owner_theme_${slug}`);
+    
+    // 💾 IMMEDIATE HYDRATION: Pull settings from local memory the millisecond the page loads
+    const savedSettings = localStorage.getItem(`owner_settings_${slug}`);
+    if (savedSettings) {
+      try {
+        const parsed = JSON.parse(savedSettings);
+        setSettingsForm(prev => ({ ...prev, ...parsed }));
+      } catch (e) {}
+    }
+
     if (savedTheme && THEMES[savedTheme]) setOwnerTheme(savedTheme);
     if (t) { setToken(t); setLoggedIn(true); } 
   }, [slug]);
@@ -80,46 +93,54 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
   useEffect(() => { 
     if (loggedIn && token) { 
         loadData(); 
-        // 🔥 SENIOR DEV FIX: Slowed down to 60 seconds (60000ms) to stop API rate limit spam!
         const interval = setInterval(loadData, 60000); 
         return () => clearInterval(interval); 
     } 
   }, [loggedIn, token, slug]);
 
   async function loadData() {
-    const [itemsData, dashData, analyticsData, workersData] = await Promise.all([
-      API.ownerGetItems(slug, token), 
-      API.ownerDashboard(slug, token), 
-      API.ownerAnalytics(slug, token).catch(() => null),
-      API.ownerGetWorkers(slug, token).catch(() => [])
-    ]);
-    
-    setItems(Array.isArray(itemsData) ? itemsData : []);
-    setDashboard(dashData);
-    setWorkers(Array.isArray(workersData) ? workersData : []);
-    if (analyticsData) setAnalytics(analyticsData);
-    
-    let parsedConfig: any = {};
-    if (dashData?.config) {
-      if (typeof dashData.config === "string") {
-        try { 
-          const safeJson = dashData.config.replace(/'/g, '"').replace(/True/g, 'true').replace(/False/g, 'false');
-          parsedConfig = JSON.parse(safeJson); 
-          if (typeof parsedConfig === "string") parsedConfig = JSON.parse(parsedConfig);
-        } catch (e) { parsedConfig = {}; }
-      } else { parsedConfig = dashData.config; }
-    }
+    try {
+      const [itemsData, dashData, analyticsData, workersData] = await Promise.all([
+        API.ownerGetItems(slug, token), 
+        API.ownerDashboard(slug, token), 
+        API.ownerAnalytics(slug, token).catch(() => null),
+        API.ownerGetWorkers(slug, token).catch(() => [])
+      ]);
+      
+      setItems(Array.isArray(itemsData) ? itemsData : []);
+      setDashboard(dashData);
+      setWorkers(Array.isArray(workersData) ? workersData : []);
+      if (analyticsData) setAnalytics(analyticsData);
+      
+      let parsedConfig: any = {};
+      if (dashData?.config) {
+        if (typeof dashData.config === "string") {
+          try { 
+            const safeJson = dashData.config.replace(/'/g, '"').replace(/True/g, 'true').replace(/False/g, 'false');
+            parsedConfig = JSON.parse(safeJson); 
+            if (typeof parsedConfig === "string") parsedConfig = JSON.parse(parsedConfig);
+          } catch (e) { parsedConfig = {}; }
+        } else { parsedConfig = dashData.config; }
+      }
 
-    if (!hasLoadedSettings) {
-      setSettingsForm({ 
-        upi_id: parsedConfig.upi_id || "", 
-        cod_enabled: parsedConfig.features?.cod || parsedConfig.cod_enabled || false, 
-        hall_ticket_enabled: parsedConfig.features?.hall_ticket || false, 
-        theme: parsedConfig.theme?.mode || parsedConfig.theme || "dark",
-        rzp_key_id: parsedConfig.rzp_key_id || "",
-        rzp_key_secret: parsedConfig.rzp_key_secret || ""
+      // 🔄 SERVER SYNC: Only update if the server has data, otherwise keep our local stored data
+      setSettingsForm(current => {
+        const newSettings = { 
+          upi_id: parsedConfig.upi_id || current.upi_id || "", 
+          cod_enabled: parsedConfig.features?.cod ?? parsedConfig.cod_enabled ?? current.cod_enabled ?? false, 
+          hall_ticket_enabled: parsedConfig.features?.hall_ticket ?? current.hall_ticket_enabled ?? false, 
+          theme: parsedConfig.theme?.mode || parsedConfig.theme || current.theme || "dark",
+          rzp_key_id: parsedConfig.rzp_key_id || current.rzp_key_id || "",
+          rzp_key_secret: parsedConfig.rzp_key_secret || current.rzp_key_secret || ""
+        };
+        // Back up to local storage so it survives refresh
+        localStorage.setItem(`owner_settings_${slug}`, JSON.stringify(newSettings));
+        return newSettings;
       });
+      
       setHasLoadedSettings(true);
+    } catch (e) {
+      console.error("Data load failed", e);
     }
   }
 
@@ -128,6 +149,7 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
     try {
       const data = await API.ownerLogin(slug, username, password);
       setToken(data.token); setLoggedIn(true); localStorage.setItem(`owner_token_${slug}`, data.token);
+      await loadData();
     } catch (e: any) { setLoginError("Invalid Credentials or Shop does not exist"); }
   }
 
@@ -203,21 +225,17 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
     }; reader.readAsText(file);
   };
 
-  // 🔥 SENIOR DEV OPTIMISTIC UPDATE: Toggle happens instantly on screen
   async function handleToggleAvailability(item: MenuItem) {
     const originalStatus = item.is_available;
     const newStatus = !originalStatus;
 
-    // 1. Update UI Instantly (Optimistic)
     setItems(prevItems => 
         prevItems.map(i => i.id === item.id ? { ...i, is_available: newStatus } : i)
     );
 
     try {
-        // 2. Send to Backend
         await API.ownerUpdateItem(slug, token, item.id, { is_available: newStatus });
     } catch (e) {
-        // 3. Revert if fails
         alert("Network Error: Failed to update item status. Reverting...");
         setItems(prevItems => 
             prevItems.map(i => i.id === item.id ? { ...i, is_available: originalStatus } : i)
@@ -246,14 +264,19 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
     if (!verifyPassword) return alert("Please enter your password to save changes.");
     setSaving(true);
     try {
+      // 💾 IMMEDIATE CACHE: Save it straight to local storage first
+      localStorage.setItem(`owner_settings_${slug}`, JSON.stringify(settingsForm));
+      
       await API.ownerUpdateConfig(slug, token, { settings: settingsForm, password: verifyPassword });
+      
       if (logoFile) {
         const fd = new FormData(); fd.append("file", logoFile);
-        const BASE_API = process.env.NEXT_PUBLIC_API_URL || "http://192.168.1.7:8000";
-        await fetch(`${BASE_API}/api/menu/owner/${slug}/logo?shop_slug=${slug}`, { method: "POST", headers: { "x-owner-token": token, "Authorization": `Bearer ${token}` }, body: fd });
+        const BASE_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://192.168.1.7:8000";
+        await fetch(`${BASE_API_URL}/api/menu/owner/${slug}/logo?shop_slug=${slug}`, { method: "POST", headers: { "x-owner-token": token, "Authorization": `Bearer ${token}` }, body: fd });
       }
-      alert("✅ Settings updated successfully!");
-      setVerifyPassword(""); setLogoFile(null); setHasLoadedSettings(false); await loadData();
+      alert("✅ Settings saved permanently!");
+      setVerifyPassword(""); setLogoFile(null); 
+      await loadData();
     } catch (e: any) { alert(e.message || "Failed to update settings. Is your password correct?"); }
     finally { setSaving(false); }
   }
@@ -535,7 +558,7 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
               </div>
 
               <div style={{ marginTop: 12, borderTop: `1px solid ${t.border}`, paddingTop: 24 }}>
-                <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 6, fontWeight: 700 }}>VERIFY PASSWORD TO SAVE</div>
+                <div style={{ color: "#ef4444", fontSize: 12, marginBottom: 6, fontWeight: 700 }}>VERIFY PASSWORD TO SAVE PERMANENTLY</div>
                 <input type="password" value={verifyPassword} onChange={e => setVerifyPassword(e.target.value)} placeholder="Enter your owner password" style={{ width: "100%", background: t.input, border: `1px solid ${t.border}`, borderRadius: 10, padding: "12px 14px", color: t.text, fontSize: 14, outline: "none", marginBottom: 16 }} />
                 <button onClick={handleSaveSettings} disabled={saving} style={{ width: "100%", background: t.primary, border: "none", borderRadius: 12, padding: 14, color: "#fff", fontWeight: 700, fontSize: 15, cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.6 : 1 }}>{saving ? "Saving Settings..." : "💾 Save Settings"}</button>
               </div>
