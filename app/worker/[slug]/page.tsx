@@ -1,227 +1,254 @@
 "use client";
 import { useState, useEffect, useRef, use } from "react";
-import { API, WS_BASE } from "@/lib/api";
-import Receipt from "@/components/Receipt";
+import { useSearchParams } from "next/navigation";
 
+const BASE_API = process.env.NEXT_PUBLIC_API_URL || "http://192.168.1.7:8000";
+
+type OrderItem = { name: string; quantity: number; price: number; variants?: any; addons?: any[] };
 type Order = {
-  id: number; token: string; customer_name: string; customer_phone: string;
-  hall_ticket: string; order_type: string; items: any[]; total_amount: number;
-  status: string; payment_status: string; created_at: string;
-  assigned_worker?: string;
-  estimated_time?: number;
+  id: number;
+  token: string;
+  customer_name: string;
+  customer_phone: string;
+  items: OrderItem[];
+  status: "pending" | "preparing" | "ready" | "completed" | "cancelled";
+  total_amount: number;
+  payment_status: string;
+  created_at: string;
+  is_cod: boolean;
 };
 
-export default function WorkerPage({ params }: { params: Promise<{ slug: string }> }) {
+// 🔥 NATIVE SWIPE COMPONENT (No external libraries needed!)
+const SwipeButton = ({ onSwipe, text, trackBg, thumbBg, disabled }: any) => {
+  const [dragX, setDragX] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const startXRef = useRef(0);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (disabled) return;
+    setIsDragging(true);
+    startXRef.current = e.clientX - dragX;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isDragging || disabled || !trackRef.current) return;
+    let newX = e.clientX - startXRef.current;
+    const maxDrag = trackRef.current.offsetWidth - 56; // 56px is the thumb width
+    if (newX < 0) newX = 0;
+    if (newX > maxDrag) newX = maxDrag;
+    setDragX(newX);
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (!isDragging || disabled || !trackRef.current) return;
+    setIsDragging(false);
+    const maxDrag = trackRef.current.offsetWidth - 56;
+    
+    if (dragX > maxDrag * 0.75) { // If swiped more than 75% of the way
+      setDragX(maxDrag);
+      onSwipe();
+      setTimeout(() => setDragX(0), 300); // Reset for the next state
+    } else {
+      setDragX(0); // Snap back to start
+    }
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+  };
+
+  return (
+    <div ref={trackRef} style={{ background: trackBg, borderRadius: 16, height: 56, position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: disabled ? 0.6 : 1, marginTop: 16 }}>
+       <div style={{ color: '#fff', fontWeight: 800, fontSize: 15, zIndex: 1, pointerEvents: 'none', paddingLeft: 24, letterSpacing: 0.5 }}>{text}</div>
+       <div 
+         onPointerDown={handlePointerDown} 
+         onPointerMove={handlePointerMove} 
+         onPointerUp={handlePointerUp} 
+         onPointerCancel={handlePointerUp}
+         style={{ position: 'absolute', left: 2, top: 2, width: 52, height: 52, background: thumbBg, borderRadius: 14, cursor: disabled ? 'wait' : 'grab', transform: `translateX(${dragX}px)`, transition: isDragging ? 'none' : 'transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, boxShadow: '0 4px 10px rgba(0,0,0,0.3)', touchAction: 'none' }}
+       >
+         {disabled ? "⏳" : "👉"}
+       </div>
+    </div>
+  );
+};
+
+export default function WorkerDashboard({ params }: { params: Promise<{ slug: string }> }) {
   const rawSlug = use(params).slug;
-  const slug = rawSlug.toLowerCase(); 
+  const slug = rawSlug.toLowerCase();
+  
+  const searchParams = useSearchParams();
+  const workerName = searchParams.get("worker") || "Kitchen Staff";
 
   const [orders, setOrders] = useState<Order[]>([]);
-  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [completing, setCompleting] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  
-  const wsRef = useRef<WebSocket | null>(null);
-  const slideRef = useRef<HTMLDivElement>(null);
-  const [slideX, setSlideX] = useState(0);
-  const [sliding, setSliding] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [updatingId, setUpdatingId] = useState<number | null>(null);
 
-  useEffect(() => { 
-    setMounted(true); 
-    fetchOrders(); 
-    connectWS(); 
-    return () => wsRef.current?.close(); 
-  }, [slug]);
-
+  // Auto-refresh orders every 15 seconds
   useEffect(() => {
-    const interval = setInterval(fetchOrders, 5000);
+    fetchOrders();
+    const interval = setInterval(fetchOrders, 15000);
     return () => clearInterval(interval);
   }, [slug]);
 
   async function fetchOrders() {
     try {
-      const data = await API.getWorkerOrders(slug);
-      setOrders(Array.isArray(data) ? data : []);
-    } catch { }
-  }
-
-  function connectWS() {
-    const ws = new WebSocket(`${WS_BASE}/api/orders/ws/${slug}`);
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => { setConnected(false); setTimeout(connectWS, 3000); };
-    ws.onerror = () => setConnected(false);
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === "new_order") {
-        setOrders(prev => [msg.order, ...prev]);
-        new Audio("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAA==").play().catch(() => {});
+      const res = await fetch(`${BASE_API}/api/menu/worker/${slug}/orders`);
+      if (res.ok) {
+        const data = await res.json();
+        setOrders(data);
       }
-    };
-    wsRef.current = ws;
-  }
-
-  async function completeOrder(token: string) {
-    setCompleting(token);
-    try {
-      await API.completeOrder(token);
-      setOrders(prev => prev.filter(o => o.token !== token));
-      setSelectedOrder(null);
     } catch (e) {
-      alert("Failed to complete order");
+      console.error("Failed to fetch orders", e);
     } finally {
-      setCompleting(null);
-      setSlideX(0);
+      setLoading(false);
     }
   }
 
-  const statusColor: Record<string, string> = {
-    confirmed: "#3b82f6", preparing: "#8b5cf6", ready: "#22c55e",
+  async function updateOrderStatus(orderId: number, currentStatus: string) {
+    const nextStatusMap: Record<string, string> = {
+      "pending": "preparing",
+      "preparing": "ready",
+      "ready": "completed"
+    };
+    
+    const newStatus = nextStatusMap[currentStatus];
+    if (!newStatus) return;
+
+    setUpdatingId(orderId);
+    
+    // Optimistic UI Update
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus as any } : o));
+
+    try {
+      await fetch(`${BASE_API}/api/menu/worker/${slug}/orders/${orderId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus })
+      });
+    } catch (e) {
+      alert("Network Error: Failed to update order status.");
+      fetchOrders(); // Revert on failure
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  // 🔥 GHOST ORDER FIX: Only show fully paid or COD orders
+  const validOrders = orders.filter(o => 
+    (o.is_cod === true || o.payment_status === "paid" || o.payment_status === "completed") 
+    && o.status !== "cancelled"
+  );
+
+  const pendingOrders = validOrders.filter(o => o.status === "pending");
+  const preparingOrders = validOrders.filter(o => o.status === "preparing");
+  const readyOrders = validOrders.filter(o => o.status === "ready");
+
+  const OrderCard = ({ order }: { order: Order }) => {
+    const timeAgo = Math.floor((new Date().getTime() - new Date(order.created_at).getTime()) / 60000);
+    const isLate = timeAgo > 10 && order.status === "pending"; // Red warning if older than 10 mins
+
+    let trackBg = "#422006"; // Pending bg
+    let thumbBg = "#eab308"; // Pending thumb
+    let swipeText = "SWIPE TO PREPARE";
+
+    if (order.status === "preparing") {
+      trackBg = "#064e3b"; thumbBg = "#22c55e"; swipeText = "SWIPE TO READY";
+    } else if (order.status === "ready") {
+      trackBg = "#1e293b"; thumbBg = "#64748b"; swipeText = "SWIPE TO CLEAR";
+    }
+
+    return (
+      <div style={{ 
+        background: "#1e293b", border: `2px solid ${isLate ? "#ef4444" : "#334155"}`, borderRadius: 20, padding: 20, 
+        display: "flex", flexDirection: "column", boxShadow: isLate ? "0 0 15px rgba(239,68,68,0.2)" : "none",
+        animation: "fadeUp 0.3s ease-out"
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #334155", paddingBottom: 12, marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 26, fontWeight: 900, color: "#fff", letterSpacing: 2, fontFamily: "monospace" }}>#{order.token}</div>
+            <div style={{ color: "#94a3b8", fontSize: 14, marginTop: 4, fontWeight: 600 }}>{order.customer_name || "Guest"} • {order.is_cod ? "💵 COD" : "💳 Paid"}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ color: isLate ? "#ef4444" : "#cbd5e1", fontWeight: 800, fontSize: 15, background: isLate ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.05)", padding: "4px 10px", borderRadius: 8 }}>
+              {timeAgo < 1 ? "New" : `${timeAgo}m ago`}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ flex: 1 }}>
+          {order.items.map((item, idx) => (
+            <div key={idx} style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, fontSize: 18, fontWeight: 700, color: "#f8fafc" }}>
+              <div><span style={{ color: "#38bdf8", marginRight: 10, background: "rgba(56,189,248,0.1)", padding: "2px 8px", borderRadius: 6 }}>{item.quantity}x</span> {item.name}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* The Native Swipe Action Button */}
+        <SwipeButton 
+          text={swipeText} 
+          trackBg={trackBg} 
+          thumbBg={thumbBg} 
+          onSwipe={() => updateOrderStatus(order.id, order.status)} 
+          disabled={updatingId === order.id} 
+        />
+      </div>
+    );
   };
 
-  if (!mounted) return null;
-
   return (
-    <div style={{ minHeight: "100vh", background: "#f3f4f6", fontFamily: "'DM Sans',sans-serif", color: "#111827" }}>
-      <style>{`
-        @keyframes spin{to{transform:rotate(360deg)}}
-        @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-        @keyframes ping{0%{transform:scale(1);opacity:1}75%,100%{transform:scale(2);opacity:0}}
-        .order-card{transition:all 0.2s ease;cursor:pointer;}
-        .order-card:hover{transform:translateX(4px);}
-        .slide-btn{position:relative;overflow:hidden;border-radius:14px;height:56px;background:#e5e7eb;border:none;cursor:pointer;width:100%;touch-action:none;}
-        .slide-track{position:absolute;left:0;top:0;bottom:0;width:64px;background:#22c55e;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:grab;box-shadow: 2px 0 10px rgba(0,0,0,0.1); z-index: 10; color: white;}
-        .slide-track:active{cursor:grabbing;}
-        .slide-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#16a34a;font-weight:800;font-size:15px;pointer-events:none;letter-spacing:1px; z-index: 5;}
-      `}</style>
-
+    <div style={{ minHeight: "100vh", background: "#0f172a", color: "#f8fafc", fontFamily: "'DM Sans', sans-serif" }}>
+      <style>{`@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+      
       {/* Header */}
-      <div style={{ background: "#ffffff", borderBottom: "1px solid #e5e7eb", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 50 }}>
+      <div style={{ background: "#1e293b", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #334155", position: "sticky", top: 0, zIndex: 10 }}>
         <div>
-          <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, fontSize: 18 }}>👨‍🍳 Kitchen Display</div>
-          <div style={{ color: "#4b5563", fontSize: 12 }}>{slug}</div>
+          <div style={{ fontWeight: 800, fontSize: 24, color: "#fff" }}>Kitchen Display System</div>
+          <div style={{ color: "#38bdf8", fontWeight: 700, fontSize: 14 }}>Station: {workerName}</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: connected ? "#22c55e" : "#ef4444", position: "relative" }}>
-            {connected && <div style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "#22c55e", animation: "ping 1.5s infinite" }} />}
-          </div>
-          <span style={{ fontSize: 12, color: connected ? "#22c55e" : "#ef4444", fontWeight: 600 }}>{connected ? "Live" : "Offline"}</span>
-          <div style={{ background: "#FF6B00", color: "#fff", borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 700, marginLeft: 8 }}>
-            {orders.length} pending
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          {loading && <div style={{ color: "#94a3b8", fontSize: 14 }}>Syncing...</div>}
+          <div style={{ background: "#334155", padding: "8px 16px", borderRadius: 8, fontWeight: 700, fontSize: 15 }}>
+            <span style={{color: "#eab308"}}>{pendingOrders.length} Pending</span>
           </div>
         </div>
       </div>
 
-      <div style={{ display: "flex", minHeight: "calc(100vh - 65px)", flexDirection: "column" }}>
+      {/* Kanban Board Layout */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 24, padding: 24, alignItems: "start" }}>
         
-        {/* Mobile-Friendly Split View */}
-        <div style={{ display: "flex", flex: 1, flexDirection: typeof window !== "undefined" && window.innerWidth < 768 ? "column" : "row" }}>
-          
-          {/* Orders List */}
-          <div style={{ width: selectedOrder && typeof window !== "undefined" && window.innerWidth >= 768 ? "40%" : "100%", borderRight: selectedOrder && typeof window !== "undefined" && window.innerWidth >= 768 ? "1px solid #e5e7eb" : "none", overflowY: "auto", padding: 16, transition: "width 0.3s ease", maxHeight: typeof window !== "undefined" && window.innerWidth < 768 && selectedOrder ? "30vh" : "auto", borderBottom: typeof window !== "undefined" && window.innerWidth < 768 && selectedOrder ? "1px solid #e5e7eb" : "none" }}>
-            {orders.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "80px 20px", color: "#4b5563" }}>
-                <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
-                <div style={{ fontWeight: 600 }}>Kitchen is clear!</div>
-                <div style={{ marginTop: 8, display: "inline-block", width: 20, height: 20, border: "2px solid #e5e7eb", borderTopColor: "#FF6B00", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {orders.map((order, i) => (
-                  <div key={order.token} className="order-card"
-                    onClick={() => setSelectedOrder(selectedOrder?.token === order.token ? null : order)}
-                    style={{ background: selectedOrder?.token === order.token ? "#f3f4f6" : "#ffffff", border: `1px solid ${selectedOrder?.token === order.token ? "#3b82f6" : "#e5e7eb"}`, borderRadius: 16, padding: 14, animation: `fadeUp 0.3s ease ${i * 0.05}s both`, boxShadow: "0 2px 4px rgba(0,0,0,0.02)" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <div style={{ fontFamily: "'JetBrains Mono',monospace", fontWeight: 800, color: "#FF6B00", fontSize: 18, letterSpacing: 2 }}>{order.token}</div>
-                      <div style={{ background: `${statusColor[order.status] || "#888"}22`, color: statusColor[order.status] || "#888", borderRadius: 10, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>
-                        {order.status}
-                      </div>
-                    </div>
-                    <div style={{ color: "#111827", fontWeight: 700, fontSize: 14 }}>{order.customer_name}</div>
-                    
-                    {/* Display AI Assigned Worker Name & ETA */}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
-                      {order.assigned_worker && <div style={{ color: "#8b5cf6", fontSize: 12, fontWeight: 700 }}>👨‍🍳 Assigned: {order.assigned_worker}</div>}
-                      <div style={{ color: "#d97706", fontSize: 12, fontWeight: 800, background: "rgba(245, 158, 11, 0.1)", padding: "2px 8px", borderRadius: 6 }}>
-                        ⏳ ETA: {order.estimated_time || 0}m
-                      </div>
-                    </div>
-                    
-                    <div style={{ color: "#4b5563", fontSize: 12, marginTop: 8, fontWeight: 500 }}>
-                      {order.order_type === "dine_in" ? "🍽️ Dine In" : "📦 Takeaway"} • {order.items.length} item{order.items.length > 1 ? "s" : ""}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+        {/* Column 1: New Orders */}
+        <div style={{ background: "rgba(30, 41, 59, 0.5)", borderRadius: 24, padding: 16, minHeight: "80vh" }}>
+          <div style={{ borderBottom: "3px solid #eab308", paddingBottom: 12, marginBottom: 20, color: "#eab308", fontWeight: 900, fontSize: 18, display: "flex", justifyContent: "space-between", letterSpacing: 1 }}>
+            <span>NEW ORDERS</span>
+            <span style={{background: "#eab308", color: "#000", padding: "2px 10px", borderRadius: 12}}>{pendingOrders.length}</span>
           </div>
-
-          {/* Order Detail View */}
-          {selectedOrder && (
-            <div style={{ flex: 1, padding: 20, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 20, background: "#f9fafb" }}>
-              <Receipt
-                token={selectedOrder.token} shopName={slug} 
-                customerName={selectedOrder.customer_name} customerPhone={selectedOrder.customer_phone}
-                hallTicket={selectedOrder.hall_ticket} orderType={selectedOrder.order_type}
-                items={selectedOrder.items} totalAmount={selectedOrder.total_amount}
-                status={selectedOrder.status} paymentStatus={selectedOrder.payment_status}
-                createdAt={selectedOrder.created_at} themeColor="#FF6B00" compact
-              />
-
-              {/* Interactive Slide to Complete */}
-              <div style={{ width: "100%", maxWidth: 440, opacity: completing === selectedOrder.token ? 0.6 : 1, pointerEvents: completing === selectedOrder.token ? "none" : "auto" }}>
-                <div 
-                  ref={slideRef} 
-                  className="slide-btn"
-                  onPointerDown={(e) => {
-                    setSliding(true);
-                    e.currentTarget.setPointerCapture(e.pointerId);
-                  }}
-                  onPointerMove={(e) => {
-                    if (!sliding || !slideRef.current) return;
-                    const rect = slideRef.current.getBoundingClientRect();
-                    const maxX = rect.width - 64; 
-                    let currentX = e.clientX - rect.left - 32; 
-                    if (currentX < 0) currentX = 0;
-                    if (currentX > maxX) currentX = maxX;
-                    setSlideX(currentX);
-                  }}
-                  onPointerUp={(e) => {
-                    if (!sliding || !slideRef.current) return;
-                    setSliding(false);
-                    e.currentTarget.releasePointerCapture(e.pointerId);
-                    const maxX = slideRef.current.getBoundingClientRect().width - 64;
-                    if (slideX > maxX * 0.85) {
-                      setSlideX(maxX);
-                      completeOrder(selectedOrder.token);
-                    } else {
-                      setSlideX(0);
-                    }
-                  }}
-                  onPointerCancel={() => {
-                    setSliding(false);
-                    setSlideX(0);
-                  }}
-                >
-                  <div className="slide-label">
-                    {completing === selectedOrder.token ? (
-                      <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div style={{ width: 18, height: 18, border: "3px solid #16a34a", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /> 
-                        Completing...
-                      </span>
-                    ) : "SLIDE TO COMPLETE >>>"}
-                  </div>
-                  
-                  <div 
-                    className="slide-track" 
-                    style={{ transform: `translateX(${slideX}px)`, transition: sliding ? "none" : "transform 0.3s ease-out" }}
-                  >
-                    ▶
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {pendingOrders.length === 0 ? <div style={{ textAlign: "center", color: "#64748b", padding: 32, fontWeight: 600 }}>Waiting for orders...</div> : pendingOrders.map(o => <OrderCard key={o.id} order={o} />)}
+          </div>
         </div>
+
+        {/* Column 2: Preparing */}
+        <div style={{ background: "rgba(30, 41, 59, 0.5)", borderRadius: 24, padding: 16, minHeight: "80vh" }}>
+          <div style={{ borderBottom: "3px solid #38bdf8", paddingBottom: 12, marginBottom: 20, color: "#38bdf8", fontWeight: 900, fontSize: 18, display: "flex", justifyContent: "space-between", letterSpacing: 1 }}>
+            <span>PREPARING</span>
+            <span style={{background: "#38bdf8", color: "#000", padding: "2px 10px", borderRadius: 12}}>{preparingOrders.length}</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {preparingOrders.length === 0 ? <div style={{ textAlign: "center", color: "#64748b", padding: 32, fontWeight: 600 }}>Kitchen is clear</div> : preparingOrders.map(o => <OrderCard key={o.id} order={o} />)}
+          </div>
+        </div>
+
+        {/* Column 3: Ready for Pickup */}
+        <div style={{ background: "rgba(30, 41, 59, 0.5)", borderRadius: 24, padding: 16, minHeight: "80vh" }}>
+          <div style={{ borderBottom: "3px solid #22c55e", paddingBottom: 12, marginBottom: 20, color: "#22c55e", fontWeight: 900, fontSize: 18, display: "flex", justifyContent: "space-between", letterSpacing: 1 }}>
+            <span>READY FOR PICKUP</span>
+            <span style={{background: "#22c55e", color: "#000", padding: "2px 10px", borderRadius: 12}}>{readyOrders.length}</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {readyOrders.length === 0 ? <div style={{ textAlign: "center", color: "#64748b", padding: 32, fontWeight: 600 }}>No orders waiting</div> : readyOrders.map(o => <OrderCard key={o.id} order={o} />)}
+          </div>
+        </div>
+
       </div>
     </div>
   );

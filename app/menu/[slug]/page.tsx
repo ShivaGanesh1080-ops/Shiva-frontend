@@ -181,6 +181,13 @@ export default function MenuPage({ params }: { params: Promise<{ slug: string }>
         await API.verifyPayment({ razorpay_order_id: response.razorpay_order_id, razorpay_payment_id: response.razorpay_payment_id, razorpay_signature: response.razorpay_signature, order_token: orderData.token, });
         const tracked = await API.trackOrder(orderData.token); setReceipt(tracked); setStep("receipt");
       },
+      // 🔥 NEW: Detect if customer cancels/closes the Razorpay window
+      modal: {
+        ondismiss: function () {
+          alert("Payment cancelled. You can try again or switch to Cash on Delivery.");
+          setStep("checkout"); // Returns them to the checkout screen seamlessly!
+        }
+      },
       prefill: { name: customerName, contact: customerPhone }, theme: { color },
     };
     const rzp = new (window as any).Razorpay(options); rzp.open();
@@ -407,7 +414,6 @@ export default function MenuPage({ params }: { params: Promise<{ slug: string }>
                 {filteredSections[sec].map((item, i) => {
                   const inCart = cart.find(c => c.id === item.id);
                   
-                  // 🔥 NEW: SWIGGY-STYLE PRICING LOGIC
                   // Automatically generate a "fake" price that is 20% higher to show as a discount
                   const fakeOriginalPrice = Math.ceil(item.price * 1.20);
                   
@@ -418,7 +424,6 @@ export default function MenuPage({ params }: { params: Promise<{ slug: string }>
                           <div style={{ width: 12, height: 12, border: "1px solid #22c55e", borderRadius: 2, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8 }}><div style={{ width: 6, height: 6, background: "#22c55e", borderRadius: "50%" }}></div></div>
                           <div style={{ fontWeight: 700, fontSize: 16, color: t.text }}>{item.name}</div>
                           
-                          {/* 🔥 NEW: SWIGGY-STYLE PRICE DISPLAY */}
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
                             <div style={{ color: color, fontWeight: 800, fontSize: 16 }}>₹{item.price}</div>
                             <div style={{ textDecoration: "line-through", color: t.textDim, fontSize: 13, fontWeight: 500 }}>₹{fakeOriginalPrice}</div>
