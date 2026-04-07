@@ -9,7 +9,6 @@ type Order = {
   status: string; payment_status: string; created_at: string;
   assigned_worker?: string;
   estimated_time?: number;
-  is_cod?: boolean; // Added this to match the backend
 };
 
 export default function WorkerPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -81,12 +80,6 @@ export default function WorkerPage({ params }: { params: Promise<{ slug: string 
 
   if (!mounted) return null;
 
-  // 🔥 THE GHOST ORDER FIX: Filter out any orders that are unpaid or cancelled
-  const validOrders = orders.filter(o => 
-    (o.is_cod === true || o.payment_status === "paid" || o.payment_status === "completed") 
-    && o.status !== "cancelled"
-  );
-
   return (
     <div style={{ minHeight: "100vh", background: "#f3f4f6", fontFamily: "'DM Sans',sans-serif", color: "#111827" }}>
       <style>{`
@@ -113,7 +106,7 @@ export default function WorkerPage({ params }: { params: Promise<{ slug: string 
           </div>
           <span style={{ fontSize: 12, color: connected ? "#22c55e" : "#ef4444", fontWeight: 600 }}>{connected ? "Live" : "Offline"}</span>
           <div style={{ background: "#FF6B00", color: "#fff", borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 700, marginLeft: 8 }}>
-            {validOrders.length} pending
+            {orders.length} pending
           </div>
         </div>
       </div>
@@ -125,7 +118,7 @@ export default function WorkerPage({ params }: { params: Promise<{ slug: string 
           
           {/* Orders List */}
           <div style={{ width: selectedOrder && typeof window !== "undefined" && window.innerWidth >= 768 ? "40%" : "100%", borderRight: selectedOrder && typeof window !== "undefined" && window.innerWidth >= 768 ? "1px solid #e5e7eb" : "none", overflowY: "auto", padding: 16, transition: "width 0.3s ease", maxHeight: typeof window !== "undefined" && window.innerWidth < 768 && selectedOrder ? "30vh" : "auto", borderBottom: typeof window !== "undefined" && window.innerWidth < 768 && selectedOrder ? "1px solid #e5e7eb" : "none" }}>
-            {validOrders.length === 0 ? (
+            {orders.length === 0 ? (
               <div style={{ textAlign: "center", padding: "80px 20px", color: "#4b5563" }}>
                 <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
                 <div style={{ fontWeight: 600 }}>Kitchen is clear!</div>
@@ -133,7 +126,7 @@ export default function WorkerPage({ params }: { params: Promise<{ slug: string 
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {validOrders.map((order, i) => (
+                {orders.map((order, i) => (
                   <div key={order.token} className="order-card"
                     onClick={() => setSelectedOrder(selectedOrder?.token === order.token ? null : order)}
                     style={{ background: selectedOrder?.token === order.token ? "#f3f4f6" : "#ffffff", border: `1px solid ${selectedOrder?.token === order.token ? "#3b82f6" : "#e5e7eb"}`, borderRadius: 16, padding: 14, animation: `fadeUp 0.3s ease ${i * 0.05}s both`, boxShadow: "0 2px 4px rgba(0,0,0,0.02)" }}>
