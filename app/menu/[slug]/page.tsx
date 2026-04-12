@@ -21,7 +21,7 @@ type Shop = { id: number; name: string; slug: string; shop_type: string; config:
 type MenuItem = { id: number; name: string; description: string; price: number; image_url: string; section: string; variants: Record<string, string[]>; addons: { name: string; price: number }[]; is_timed: boolean; available_from: string; available_until: string; };
 type CartItem = MenuItem & { qty: number; selected_variants: Record<string, string>; selected_addons: { name: string; price: number }[]; };
 
-type Step = "type" | "menu" | "checkout" | "payment" | "receipt" | "track";
+type Step = "type" | "menu" | "checkout" | "receipt" | "track"; // Removed "payment" step
 
 export default function MenuPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = use(params);
@@ -39,7 +39,6 @@ export default function MenuPage({ params }: { params: Promise<{ slug: string }>
   const [deliveryLocation, setDeliveryLocation] = useState(""); 
   const [loading, setLoading] = useState(true);
   const [placing, setPlacing] = useState(false);
-  const [orderData, setOrderData] = useState<any>(null);
   const [receipt, setReceipt] = useState<any>(null);
   const [trackToken, setTrackToken] = useState("");
   const [activeSection, setActiveSection] = useState("");
@@ -140,6 +139,7 @@ export default function MenuPage({ params }: { params: Promise<{ slug: string }>
     }
   }
 
+  // 🔥 COMPLETELY REWRITTEN: Now instantly triggers Razorpay!
   async function handlePlaceOrder() {
     if (!customerName.trim()) return alert("Please enter your full name.");
     if (!validatePhone(customerPhone)) return alert("Please enter a valid 10-digit mobile number.");
@@ -164,33 +164,55 @@ export default function MenuPage({ params }: { params: Promise<{ slug: string }>
         items: cart.map(c => ({ id: c.id, name: c.name, price: c.price, qty: c.qty, section: c.section, selected_variants: c.selected_variants, selected_addons: c.selected_addons, })) 
       });
       
-      if (finalPaymentMethod === "cod") { const tracked = await API.trackOrder(data.token); setReceipt(tracked); setStep("receipt"); } else { setOrderData(data); setStep("payment"); }
-    } catch (e: any) { alert(e.message || "Failed to place order"); } finally { setPlacing(false); }
-  }
-
-  function handleRazorpay() {
-    if (!orderData) return;
-    
-    if (!(window as any).Razorpay) {
-        return alert("Razorpay failed to load. Please check your internet connection and try again.");
-    }
-
-    const options = {
-      key: orderData.key_id, amount: orderData.amount, currency: "INR", name: shop?.name, description: "Order Payment", order_id: orderData.razorpay_order_id,
-      handler: async (response: any) => {
-        await API.verifyPayment({ razorpay_order_id: response.razorpay_order_id, razorpay_payment_id: response.razorpay_payment_id, razorpay_signature: response.razorpay_signature, order_token: orderData.token, });
-        const tracked = await API.trackOrder(orderData.token); setReceipt(tracked); setStep("receipt");
-      },
-      // 🔥 NEW: Detect if customer cancels/closes the Razorpay window
-      modal: {
-        ondismiss: function () {
-          alert("Payment cancelled. You can try again or switch to Cash on Delivery.");
-          setStep("checkout"); // Returns them to the checkout screen seamlessly!
+      if (finalPaymentMethod === "cod") { 
+        const tracked = await API.trackOrder(data.token); 
+        setReceipt(tracked); 
+        setStep("receipt"); 
+        setPlacing(false);
+      } else { 
+        // ⚡ INSTANT RAZORPAY TRIGGER
+        if (!(window as any).Razorpay) {
+            setPlacing(false);
+            return alert("Razorpay failed to load. Please check your internet connection.");
         }
-      },
-      prefill: { name: customerName, contact: customerPhone }, theme: { color },
-    };
-    const rzp = new (window as any).Razorpay(options); rzp.open();
+
+        const options = {
+          key: data.key_id, 
+          amount: data.amount, 
+          currency: "INR", 
+          name: shop?.name, 
+          description: "Order Payment", 
+          order_id: data.razorpay_order_id,
+          handler: async (response: any) => {
+            // Keep button in "Processing" state while verifying
+            await API.verifyPayment({ 
+              razorpay_order_id: response.razorpay_order_id, 
+              razorpay_payment_id: response.razorpay_payment_id, 
+              razorpay_signature: response.razorpay_signature, 
+              order_token: data.token, 
+            });
+            const tracked = await API.trackOrder(data.token); 
+            setReceipt(tracked); 
+            setStep("receipt");
+            setPlacing(false);
+          },
+          modal: {
+            ondismiss: function () {
+              // Customer closed Razorpay window! Reset button.
+              alert("Payment cancelled. You can try again or switch to Cash on Delivery.");
+              setPlacing(false); 
+            }
+          },
+          prefill: { name: customerName, contact: customerPhone }, 
+          theme: { color },
+        };
+        const rzp = new (window as any).Razorpay(options); 
+        rzp.open();
+      }
+    } catch (e: any) { 
+      alert(e.message || "Failed to place order"); 
+      setPlacing(false); 
+    } 
   }
 
   async function handleTrackToken() {
@@ -351,18 +373,6 @@ export default function MenuPage({ params }: { params: Promise<{ slug: string }>
     </div>
   );
 
-  if (step === "payment") return (
-    <div style={{ minHeight: "100vh", background: t.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ background: t.card, border: `1px solid ${t.border}`, borderRadius: 24, padding: 40, maxWidth: 400, width: "100%", textAlign: "center" }}>
-        <div style={{ fontSize: 56, marginBottom: 20 }}>🛡️</div>
-        <div style={{ color: t.text, fontWeight: 800, fontSize: 24, marginBottom: 8 }}>Secure Payment</div>
-        <div style={{ color: t.textDim, fontSize: 15, marginBottom: 32 }}>Amount to pay: <span style={{ color: color, fontWeight: 800, fontSize: 20 }}>₹{orderData?.amount ? (orderData.amount / 100).toFixed(2) : "0.00"}</span></div>
-        <button onClick={handleRazorpay} style={{ width: "100%", background: color, border: "none", borderRadius: 16, padding: 18, color: "#fff", fontWeight: 800, fontSize: 16, cursor: "pointer", marginBottom: 24 }}>Pay with UPI / Cards</button>
-        <div style={{ color: t.textDim, fontSize: 12, background: t.input, padding: "12px", borderRadius: 12 }}>Token: <span style={{ color: t.text, fontFamily: "'JetBrains Mono',monospace", fontWeight: 700, letterSpacing: 2 }}>{orderData?.token}</span></div>
-      </div>
-    </div>
-  );
-
   return (
     <div style={{ minHeight: "100vh", background: t.bg, color: t.text, fontFamily: "'DM Sans',sans-serif", paddingBottom: cartCount > 0 ? "100px" : "0" }}>
       
@@ -413,8 +423,6 @@ export default function MenuPage({ params }: { params: Promise<{ slug: string }>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "20px" }}>
                 {filteredSections[sec].map((item, i) => {
                   const inCart = cart.find(c => c.id === item.id);
-                  
-                  // Automatically generate a "fake" price that is 20% higher to show as a discount
                   const fakeOriginalPrice = Math.ceil(item.price * 1.20);
                   
                   return (
