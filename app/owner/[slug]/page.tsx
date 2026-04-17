@@ -53,7 +53,6 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedItems, setSelectedItems] = useState<number[]>([]);
   
-  // 🔥 ALWAYS initialize with empty strings so React controls the inputs immediately
   const [settingsForm, setSettingsForm] = useState({ upi_id: "", cod_enabled: false, hall_ticket_enabled: false, theme: "dark", rzp_key_id: "", rzp_key_secret: "" });
   
   const [verifyPassword, setVerifyPassword] = useState("");
@@ -77,7 +76,6 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
     const t = localStorage.getItem(`owner_token_${slug}`); 
     const savedTheme = localStorage.getItem(`owner_theme_${slug}`);
     
-    // 💾 IMMEDIATE HYDRATION: Pull settings from local memory the millisecond the page loads
     const savedSettings = localStorage.getItem(`owner_settings_${slug}`);
     if (savedSettings) {
       try {
@@ -123,7 +121,6 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
         } else { parsedConfig = dashData.config; }
       }
 
-      // 🔄 SERVER SYNC: Only update if the server has data, otherwise keep our local stored data
       setSettingsForm(current => {
         const newSettings = { 
           upi_id: parsedConfig.upi_id || current.upi_id || "", 
@@ -133,7 +130,6 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
           rzp_key_id: parsedConfig.rzp_key_id || current.rzp_key_id || "",
           rzp_key_secret: parsedConfig.rzp_key_secret || current.rzp_key_secret || ""
         };
-        // Back up to local storage so it survives refresh
         localStorage.setItem(`owner_settings_${slug}`, JSON.stringify(newSettings));
         return newSettings;
       });
@@ -229,17 +225,13 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
     const originalStatus = item.is_available;
     const newStatus = !originalStatus;
 
-    setItems(prevItems => 
-        prevItems.map(i => i.id === item.id ? { ...i, is_available: newStatus } : i)
-    );
+    setItems(prevItems => prevItems.map(i => i.id === item.id ? { ...i, is_available: newStatus } : i));
 
     try {
         await API.ownerUpdateItem(slug, token, item.id, { is_available: newStatus });
     } catch (e) {
         alert("Network Error: Failed to update item status. Reverting...");
-        setItems(prevItems => 
-            prevItems.map(i => i.id === item.id ? { ...i, is_available: originalStatus } : i)
-        );
+        setItems(prevItems => prevItems.map(i => i.id === item.id ? { ...i, is_available: originalStatus } : i));
     }
   }
 
@@ -264,9 +256,7 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
     if (!verifyPassword) return alert("Please enter your password to save changes.");
     setSaving(true);
     try {
-      // 💾 IMMEDIATE CACHE: Save it straight to local storage first
       localStorage.setItem(`owner_settings_${slug}`, JSON.stringify(settingsForm));
-      
       await API.ownerUpdateConfig(slug, token, { settings: settingsForm, password: verifyPassword });
       
       if (logoFile) {
@@ -305,7 +295,6 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
 
   const filteredItems = items.filter(item => item.name.toLowerCase().includes(searchQuery.toLowerCase()) || (item.description && item.description.toLowerCase().includes(searchQuery.toLowerCase())));
   const sections = Array.from(new Set(filteredItems.map(i => i.section)));
-  const formFieldKeys = ["name", "price", "prep_time", "section", "description"];
 
   const chartData = analytics ? analytics[chartRange] : [];
   const maxChartVal = Math.max(...chartData.map((d: any) => d.value), 1);
@@ -320,14 +309,26 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
     shopLogo = pConf.logo_url || "";
   }
 
-  let displayOrders = dashboard?.recent_orders || [];
+  // 🔥 GHOST ORDER FIX: Filter out unpaid online orders from the real stats
+  const allOrders = dashboard?.recent_orders || [];
+  const failedCount = allOrders.filter(o => o.payment_status !== "paid" && o.payment_method !== "cod").length;
+  
+  // Calculate true frontend numbers by subtracting failed ghost orders
+  const displayTotalOrders = Math.max(0, (dashboard?.total_orders || 0) - failedCount);
+  const displayPendingOrders = Math.max(0, (dashboard?.pending_orders || 0) - failedCount);
+
+  let displayOrders = allOrders;
   if (activeStatModal === "today") {
       const today = new Date().toISOString().split('T')[0];
-      displayOrders = displayOrders.filter(o => o.created_at && o.created_at.startsWith(today));
+      displayOrders = displayOrders.filter(o => o.created_at && o.created_at.startsWith(today) && (o.payment_status === "paid" || o.payment_method === "cod"));
   } else if (activeStatModal === "paid") {
       displayOrders = displayOrders.filter(o => o.payment_status === "paid");
   } else if (activeStatModal === "pending") {
-      displayOrders = displayOrders.filter(o => ["pending", "confirmed", "preparing"].includes(o.status));
+      // ONLY show real paid/cod orders that are waiting
+      displayOrders = displayOrders.filter(o => ["pending", "confirmed", "preparing"].includes(o.status) && (o.payment_status === "paid" || o.payment_method === "cod"));
+  } else if (activeStatModal === "failed") {
+      // ONLY show the abandoned Ghost Orders
+      displayOrders = displayOrders.filter(o => o.payment_status !== "paid" && o.payment_method !== "cod");
   }
 
   return (
@@ -344,7 +345,9 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.8)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 16 }}>
           <div style={{ background: t.card, border: `1px solid ${t.border}`, borderRadius: 20, padding: 24, width: "100%", maxWidth: 650, maxHeight: "85vh", display: "flex", flexDirection: "column", animation: "fadeUp 0.3s ease" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, borderBottom: `1px solid ${t.border}`, paddingBottom: 16 }}>
-              <div style={{ fontSize: 18, fontWeight: 800, textTransform: "capitalize" }}>{activeStatModal} Orders ({displayOrders.length})</div>
+              <div style={{ fontSize: 18, fontWeight: 800, textTransform: "capitalize", color: activeStatModal === "failed" ? "#ef4444" : t.text }}>
+                {activeStatModal === "failed" ? "Failed / Abandoned" : activeStatModal} Orders ({displayOrders.length})
+              </div>
               <button onClick={() => setActiveStatModal(null)} style={{ background: "transparent", border: "none", color: t.textDim, cursor: "pointer", fontSize: 24, lineHeight: 1 }}>×</button>
             </div>
             <div style={{ overflowY: "auto", flex: 1, paddingRight: 8 }}>
@@ -352,16 +355,18 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
                 <div style={{ textAlign: "center", color: t.textDim, padding: "40px 0" }}>No orders found for this category.</div>
               ) : (
                 displayOrders.map((order, i) => (
-                  <div key={i} style={{ background: t.input, border: `1px solid ${t.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
+                  <div key={i} style={{ background: t.input, border: `1px solid ${activeStatModal === "failed" ? "rgba(239,68,68,0.3)" : t.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                      <div style={{ color: t.primary, fontWeight: 800, fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1 }}>{order.token}</div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: order.status === "ready" ? "#22c55e" : "#f59e0b", background: t.bg, padding: "2px 8px", borderRadius: 6, textTransform: "uppercase" }}>{order.status}</div>
+                      <div style={{ color: activeStatModal === "failed" ? "#ef4444" : t.primary, fontWeight: 800, fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1 }}>{order.token}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: activeStatModal === "failed" ? "#ef4444" : (order.status === "ready" ? "#22c55e" : "#f59e0b"), background: t.bg, padding: "2px 8px", borderRadius: 6, textTransform: "uppercase" }}>
+                        {activeStatModal === "failed" ? "Payment Failed" : order.status}
+                      </div>
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "12px 24px", fontSize: 14 }}>
                       <div><span style={{ color: t.textDim, fontSize: 12, display: "block" }}>Customer</span><span style={{ fontWeight: 600 }}>{order.customer_name || "N/A"}</span></div>
                       <div><span style={{ color: t.textDim, fontSize: 12, display: "block" }}>Phone</span><span style={{ fontWeight: 600 }}>{order.customer_phone || "N/A"}</span></div>
                       {order.hall_ticket && <div><span style={{ color: t.textDim, fontSize: 12, display: "block" }}>ID/Ticket</span><span style={{ fontWeight: 600 }}>{order.hall_ticket}</span></div>}
-                      <div><span style={{ color: t.textDim, fontSize: 12, display: "block" }}>Amount</span><span style={{ fontWeight: 600, color: "#22c55e" }}>₹{order.total_amount.toFixed(0)}</span></div>
+                      <div><span style={{ color: t.textDim, fontSize: 12, display: "block" }}>Amount</span><span style={{ fontWeight: 600, color: activeStatModal === "failed" ? t.textDim : "#22c55e", textDecoration: activeStatModal === "failed" ? "line-through" : "none" }}>₹{order.total_amount.toFixed(0)}</span></div>
                     </div>
                   </div>
                 ))
@@ -402,7 +407,7 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
           <div style={{ color: t.textDim, fontSize: 12 }}>Owner Panel</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <select value={ownerTheme} onChange={(e) => { setOwnerTheme(e.target.value); localStorage.setItem(`owner_theme_${slug}`, e.target.value); }} style={{ background: t.input, color: t.text, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px", fontSize: 12, cursor: "pointer", outline: "none" }}>
+          <select value={ownerTheme} onChange={(e) => { setOwnerTheme(e.target.value); localStorage.setItem(`owner_theme_${slug}`, e.target.value); }} style={{ background: t.input, color: t.text, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px", fontSize: 12, cursor: "pointer", outline: "none", display: typeof window !== "undefined" && window.innerWidth < 600 ? "none" : "block" }}>
             <option value="dark">🌙 Dark Theme</option><option value="light">☀️ Light Theme</option><option value="motion">🌀 Motion Theme</option><option value="nature">🌿 Nature Theme</option><option value="ocean">🌊 Ocean Theme</option>
           </select>
           <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#22c55e", fontSize: 12, fontWeight: 600 }}>
@@ -413,14 +418,14 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${t.border}`, background: t.bg, paddingRight: 16 }}>
-        <div style={{ display: "flex", gap: 0, overflowX: "auto" }}>
+        <div style={{ display: "flex", gap: 0, overflowX: "auto" }} className="no-scrollbar">
           {[
             ["dashboard", "📊 Dashboard"], ["orders", "📈 Analytics"], ["menu", "🍽️ Menu Editor"], ["additem", "➕ Add Item"], ["qrcodes", "📱 QRs & Workers"], ["settings", "⚙️ Settings"]
           ].map(([tb, label]) => (
             <button key={tb} onClick={() => setTab(tb as any)} style={{ padding: "14px 20px", background: "transparent", border: "none", borderBottom: tab === tb ? `2px solid ${t.primary}` : "2px solid transparent", color: tab === tb ? t.primary : t.textDim, cursor: "pointer", fontWeight: tab === tb ? 700 : 500, fontSize: 14, whiteSpace: "nowrap", transition: "all 0.2s" }}>{label}</button>
           ))}
         </div>
-        <button onClick={() => csvFileRef.current?.click()} disabled={isImporting} style={{ background: t.card, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px 12px", color: t.text, cursor: isImporting ? "wait" : "pointer", fontSize: 13, flexShrink: 0, marginLeft: 16 }}>
+        <button onClick={() => csvFileRef.current?.click()} disabled={isImporting} style={{ background: t.card, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px 12px", color: t.text, cursor: isImporting ? "wait" : "pointer", fontSize: 13, flexShrink: 0, marginLeft: 16, display: typeof window !== "undefined" && window.innerWidth < 600 ? "none" : "block" }}>
           {isImporting ? "⏳ Importing..." : "📂 Bulk Import CSV"}
         </button>
       </div>
@@ -430,10 +435,11 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
         {tab === "dashboard" && dashboard && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 16, animation: "fadeUp 0.4s ease" }}>
             {[
-              { id: "total", label: "Total Orders", value: dashboard.total_orders || 0, icon: "📋", color: "#3b82f6" },
+              { id: "total", label: "Valid Orders", value: displayTotalOrders, icon: "📋", color: "#3b82f6" },
               { id: "today", label: "Today's Orders", value: dashboard.today_orders || 0, icon: "📅", color: "#8b5cf6" },
               { id: "paid", label: "Paid Orders", value: dashboard.paid_orders || 0, icon: "✅", color: "#22c55e" },
-              { id: "pending", label: "Pending", value: dashboard.pending_orders || 0, icon: "⏳", color: "#f59e0b" },
+              { id: "pending", label: "Active to Serve", value: displayPendingOrders, icon: "🍳", color: "#f59e0b" },
+              { id: "failed", label: "Failed Payments", value: failedCount, icon: "❌", color: "#ef4444" },
               { id: "revenue", label: "Total Revenue", value: `₹${(dashboard.revenue || 0).toFixed(0)}`, icon: "💰", color: t.primary },
               { id: "menu", label: "Menu Items", value: items?.length || 0, icon: "🍴", color: "#ec4899" },
             ].map((stat, i) => (
@@ -587,7 +593,7 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
                       const workerUrl = `${baseUrl}/worker/${slug}?worker=${encodeURIComponent(worker.worker_name)}`;
                       return (
                         <div key={worker.id} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 12, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ display: "flex", justify-content: "space-between", alignItems: "center" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <span style={{ fontSize: 16 }}>👨‍🍳</span>
                               <span style={{ fontWeight: 600, fontSize: 14 }}>{worker.worker_name}</span>
@@ -647,7 +653,7 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
               {selectedItems.length > 0 && (<button onClick={handleBulkDelete} disabled={saving} style={{ background: "#ef4444", color: "#fff", border: "none", borderRadius: 12, padding: "0 20px", fontWeight: 700, cursor: "pointer", height: 50 }}>{saving ? "Removing..." : `🗑️ Delete (${selectedItems.length})`}</button>)}
             </div>
             
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, background: t.card, padding: "12px 16px", borderRadius: 12, border: `1px solid ${t.border}` }}>
+            <div style={{ display: "flex", justify-content: "space-between", alignItems: "center", marginBottom: 16, background: t.card, padding: "12px 16px", borderRadius: 12, border: `1px solid ${t.border}` }}>
               <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
                 <input type="checkbox" checked={selectedItems.length === filteredItems.length && filteredItems.length > 0} onChange={() => { if (selectedItems.length === filteredItems.length) setSelectedItems([]); else setSelectedItems(filteredItems.map(i => i.id)); }} style={{ width: 18, height: 18, accentColor: t.primary, cursor: "pointer" }} />
                 <span style={{ fontWeight: 600, fontSize: 14 }}>Select All Items</span>
@@ -662,13 +668,12 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
                   <div key={item.id} style={{ background: selectedItems.includes(item.id) ? t.bg : t.card, border: `1px solid ${selectedItems.includes(item.id) ? "#ef4444" : t.border}`, borderRadius: 14, padding: 14, marginBottom: 8, display: "flex", gap: 12, alignItems: "center", animation: `fadeUp 0.3s ease ${idx * 0.05}s both`, transition: "all 0.2s" }}>
                     <input type="checkbox" checked={selectedItems.includes(item.id)} onChange={() => toggleSelectItem(item.id)} style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#ef4444" }} />
                     <div style={{ width: 56, height: 56, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: t.input, cursor: "pointer" }} onClick={() => { setUploadTarget(item); fileRef.current?.click(); }}>
-                      {item.image_url ? <img src={`${IMG_BASE}${item.image_url}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>📷</div>}
+                      {item.image_url ? <img src={`${IMG_BASE}${item.image_url}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justify-content: "center", fontSize: 22 }}>📷</div>}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div><div style={{ color: t.primary, fontWeight: 700, fontSize: 13 }}>₹{item.price}</div>{item.is_timed && <div style={{ color: t.textDim, fontSize: 11 }}>⏰ {item.available_from}–{item.available_until}</div>}</div>
                     <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
                       <button onClick={() => openEditModal(item)} style={{ background: t.input, border: `1px solid ${t.border}`, borderRadius: 8, padding: "5px 10px", color: t.text, cursor: "pointer", fontSize: 12 }}>✏️ Edit</button>
                       
-                      {/* 🔥 OPTIMISTIC TOGGLE BUTTON */}
                       <button 
                         onClick={() => handleToggleAvailability(item)} 
                         className="optimistic-btn"
