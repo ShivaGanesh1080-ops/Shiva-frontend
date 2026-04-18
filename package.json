@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@tailwindcss/postcss": "^4.2.2",
     "autoprefixer": "^10.5.0",
     "next": "^16.2.2",
     "postcss": "^8.5.10",
