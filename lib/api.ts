@@ -11,7 +11,8 @@ const getMasterToken = () => {
 // Bulletproof JSON Fetcher to handle empty responses and backend errors safely
 const fetchJSON = async (url: string, options: RequestInit = {}) => {
   try {
-    const res = await fetch(url, options);
+    // 🔥 FORCE NO-CACHE HERE so Next.js never shows stale data
+    const res = await fetch(url, { ...options, cache: "no-store" });
     const text = await res.text(); // Read as text first to prevent JSON parse crashes
     
     let data = {};

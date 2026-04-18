@@ -593,7 +593,7 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
                       const workerUrl = `${baseUrl}/worker/${slug}?worker=${encodeURIComponent(worker.worker_name)}`;
                       return (
                         <div key={worker.id} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 12, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
-                          <div style={{ display: "flex", justify-content: "space-between", alignItems: "center" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <span style={{ fontSize: 16 }}>👨‍🍳</span>
                               <span style={{ fontWeight: 600, fontSize: 14 }}>{worker.worker_name}</span>
@@ -653,7 +653,7 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
               {selectedItems.length > 0 && (<button onClick={handleBulkDelete} disabled={saving} style={{ background: "#ef4444", color: "#fff", border: "none", borderRadius: 12, padding: "0 20px", fontWeight: 700, cursor: "pointer", height: 50 }}>{saving ? "Removing..." : `🗑️ Delete (${selectedItems.length})`}</button>)}
             </div>
             
-            <div style={{ display: "flex", justify-content: "space-between", alignItems: "center", marginBottom: 16, background: t.card, padding: "12px 16px", borderRadius: 12, border: `1px solid ${t.border}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, background: t.card, padding: "12px 16px", borderRadius: 12, border: `1px solid ${t.border}` }}>
               <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
                 <input type="checkbox" checked={selectedItems.length === filteredItems.length && filteredItems.length > 0} onChange={() => { if (selectedItems.length === filteredItems.length) setSelectedItems([]); else setSelectedItems(filteredItems.map(i => i.id)); }} style={{ width: 18, height: 18, accentColor: t.primary, cursor: "pointer" }} />
                 <span style={{ fontWeight: 600, fontSize: 14 }}>Select All Items</span>
@@ -668,7 +668,7 @@ export default function OwnerPage({ params }: { params: Promise<{ slug: string }
                   <div key={item.id} style={{ background: selectedItems.includes(item.id) ? t.bg : t.card, border: `1px solid ${selectedItems.includes(item.id) ? "#ef4444" : t.border}`, borderRadius: 14, padding: 14, marginBottom: 8, display: "flex", gap: 12, alignItems: "center", animation: `fadeUp 0.3s ease ${idx * 0.05}s both`, transition: "all 0.2s" }}>
                     <input type="checkbox" checked={selectedItems.includes(item.id)} onChange={() => toggleSelectItem(item.id)} style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#ef4444" }} />
                     <div style={{ width: 56, height: 56, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: t.input, cursor: "pointer" }} onClick={() => { setUploadTarget(item); fileRef.current?.click(); }}>
-                      {item.image_url ? <img src={`${IMG_BASE}${item.image_url}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justify-content: "center", fontSize: 22 }}>📷</div>}
+                      {item.image_url ? <img src={`${IMG_BASE}${item.image_url}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>📷</div>}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div><div style={{ color: t.primary, fontWeight: 700, fontSize: 13 }}>₹{item.price}</div>{item.is_timed && <div style={{ color: t.textDim, fontSize: 11 }}>⏰ {item.available_from}–{item.available_until}</div>}</div>
                     <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
